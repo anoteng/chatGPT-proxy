@@ -3,6 +3,7 @@ import openai
 import sqlite3
 import os
 from uuid import uuid4
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", str(uuid4()))  # For session management
@@ -16,7 +17,8 @@ def init_db():
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL
             )
         ''')
         conn.execute('''
@@ -41,25 +43,45 @@ def init_db():
 def index():
     if request.method == "POST":
         username = request.form.get("username")
-        if not username:
-            return render_template("login.html", error="Username is required")
+        password = request.form.get("password")
+        if not username or not password:
+            return render_template("login.html", error="Username and password are required")
 
         with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.execute("SELECT id FROM users WHERE username = ?", (username,))
+            cursor = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (username,))
             row = cursor.fetchone()
-            if row:
-                user_id = row[0]
+            if row and check_password_hash(row[1], password):
+                session["user_id"] = row[0]
+                session["username"] = username
+                return redirect(url_for("chat"))
             else:
-                cursor = conn.execute("INSERT INTO users (username) VALUES (?)", (username,))
-                user_id = cursor.lastrowid
-
-        session["user_id"] = user_id
-        session["username"] = username
-        return redirect(url_for("chat"))
+                return render_template("login.html", error="Invalid username or password")
 
     if "user_id" in session:
         return redirect(url_for("chat"))
     return render_template("login.html")
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    allowed_users = os.environ.get("ALLOWED_USERS", "").split(",")
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        if not username or not password:
+            return render_template("register.html", error="Username and password are required")
+
+        if username not in allowed_users:
+            return render_template("register.html", error="You are not allowed to register.")
+
+        password_hash = generate_password_hash(password)
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, password_hash))
+            return redirect(url_for("index"))
+        except sqlite3.IntegrityError:
+            return render_template("register.html", error="Username already exists.")
+
+    return render_template("register.html")
 
 @app.route("/chat")
 def chat():
@@ -89,12 +111,10 @@ def post_message(thread_id):
         return jsonify({"error": "No message provided."}), 400
 
     with sqlite3.connect(DB_PATH) as conn:
-        # Validate thread ownership
         row = conn.execute("SELECT id FROM threads WHERE id = ? AND user_id = ?", (thread_id, session["user_id"])).fetchone()
         if not row:
             return jsonify({"error": "Thread not found."}), 404
 
-        # Store user message
         conn.execute("INSERT INTO messages (thread_id, role, content) VALUES (?, ?, ?)", (thread_id, "user", message))
         cursor = conn.execute("SELECT role, content FROM messages WHERE thread_id = ? ORDER BY id ASC", (thread_id,))
         messages = [{"role": role, "content": content} for role, content in cursor.fetchall()]
@@ -115,6 +135,30 @@ def post_message(thread_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/chat/<int:thread_id>/history", methods=["GET"])
+def thread_history(thread_id):
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT id FROM threads WHERE id = ? AND user_id = ?", (thread_id, session["user_id"])).fetchone()
+        if not row:
+            return jsonify({"error": "Thread not found."}), 404
+        cursor = conn.execute("SELECT role, content FROM messages WHERE thread_id = ? ORDER BY id ASC", (thread_id,))
+        messages = [{"role": role, "content": content} for role, content in cursor.fetchall()]
+    return jsonify({"messages": messages})
+
+@app.route("/delete_thread/<int:thread_id>", methods=["POST"])
+def delete_thread(thread_id):
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT id FROM threads WHERE id = ? AND user_id = ?", (thread_id, session["user_id"])).fetchone()
+        if not row:
+            return jsonify({"error": "Thread not found."}), 404
+        conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+        conn.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
+    return jsonify({"success": True})
+
 @app.route("/logout")
 def logout():
     session.clear()
@@ -127,4 +171,3 @@ def send_static(path):
 if __name__ == "__main__":
     init_db()
     app.run(host="127.0.0.1", port=5005, debug=True)
-
