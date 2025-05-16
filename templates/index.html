@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat med GPT</title>
+  <script src="/static/script.js" defer></script>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 2em auto; }
+    .chatbox { border: 1px solid #ccc; padding: 1em; height: 400px; overflow-y: auto; background: #f9f9f9; }
+    .user { font-weight: bold; color: navy; }
+    .assistant { color: green; margin-bottom: 1em; }
+    .message { margin: 0.5em 0; white-space: pre-wrap; }
+    input, button { font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h2>Chat med GPT</h2>
+  <div class="chatbox" id="chatbox"></div>
+  <form id="chat-form">
+    <input type="text" id="message" placeholder="Skriv melding..." size="60" required>
+    <button type="submit">Send</button>
+  </form>
+  <input type="hidden" id="user-id" value="{{ user }}">
+</body>
+</html>
+
